@@ -1,0 +1,41 @@
+[package]
+name = "sequelit"
+version = "0.1.0"
+description = "A local-first SQL client to perform SQL operations conveniently"
+authors = ["Sequelit Contributors"]
+edition = "2021"
+
+[lib]
+name = "sequelit_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8", features = [
+  "runtime-tokio-native-tls",
+  "any",
+  "postgres",
+  "mysql",
+  "sqlite",
+  "chrono",
+  "uuid",
+  "json",
+] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+ring = "0.17"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
+anyhow = "1"
+once_cell = "1"
+dirs = "5"
+csv = "1"
