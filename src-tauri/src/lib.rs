@@ -5,6 +5,7 @@ mod db;
 mod session;
 
 use commands::ai::*;
+use commands::inspector::*;
 use commands::config_editor::*;
 use commands::connections::*;
 use commands::extras::*;
@@ -175,6 +176,11 @@ pub fn run() {
             get_schemas,
             get_tables,
             get_table_detail,
+            get_table_indexes,
+            get_table_constraints,
+            get_schema_types,
+            get_schema_functions,
+            get_schema_sequences,
             // Saved queries
             save_query,
             get_saved_queries,

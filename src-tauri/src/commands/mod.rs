@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod inspector;
 pub mod config_editor;
 pub mod connections;
 pub mod extras;

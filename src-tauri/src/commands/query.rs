@@ -119,9 +119,20 @@ pub async fn fetch_table_rows(
         "sqlite" => format!("SELECT * FROM \"{}\" LIMIT {} OFFSET {}", table, page_size, offset),
         "mysql" => format!("SELECT * FROM `{}`.`{}` LIMIT {} OFFSET {}", schema, table, page_size, offset),
         _ => {
-            // Build a SELECT that casts Any-driver-incompatible Postgres types to text.
-            let select = build_pg_safe_select(&pool, &schema, &table).await;
-            format!("{} LIMIT {} OFFSET {}", select, page_size, offset)
+            // Build a SELECT that casts Any-driver-incompatible Postgres types to text,
+            // and capture the real column types so we can restore them in the result.
+            let (select, real_types) = build_pg_safe_select(&pool, &schema, &table).await;
+            let sql = format!("{} LIMIT {} OFFSET {}", select, page_size, offset);
+            let mut result = execute_query(&pool, &sql).await;
+            // sqlx reports casted columns as "TEXT"; restore the real types for display.
+            if !real_types.is_empty() {
+                for col in &mut result.columns {
+                    if let Some(real) = real_types.get(&col.name) {
+                        col.type_name = real.clone();
+                    }
+                }
+            }
+            return Ok(result);
         }
     };
     Ok(execute_query(&pool, &sql).await)
@@ -271,10 +282,17 @@ pub async fn update_table_cell(
 
 /// Builds a SELECT list for a Postgres table where columns with types the sqlx Any
 /// driver cannot decode (uuid, json, jsonb, inet, arrays, enums, etc.) are cast to text.
-async fn build_pg_safe_select(pool: &sqlx::AnyPool, schema: &str, table: &str) -> String {
+/// Returns `(sql, real_types)` where `real_types` maps column name → PostgreSQL type name
+/// so callers can restore accurate type labels in the result after execution.
+async fn build_pg_safe_select(
+    pool: &sqlx::AnyPool,
+    schema: &str,
+    table: &str,
+) -> (String, std::collections::HashMap<String, String>) {
     use sqlx::Row;
 
     let fallback = format!("SELECT * FROM \"{}\".\"{}\"", schema, table);
+    let empty: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
     let Ok(rows) = sqlx::query(
         "SELECT column_name::text, data_type::text, udt_name::text \
@@ -286,19 +304,29 @@ async fn build_pg_safe_select(pool: &sqlx::AnyPool, schema: &str, table: &str) -
     .bind(table)
     .fetch_all(pool)
     .await else {
-        return fallback;
+        return (fallback, empty);
     };
 
     if rows.is_empty() {
-        return fallback;
+        return (fallback, empty);
     }
 
+    let mut real_types = std::collections::HashMap::new();
     let cols: Vec<String> = rows
         .iter()
         .map(|r| {
             let name: String = r.try_get(0).unwrap_or_default();
             let data_type: String = r.try_get(1).unwrap_or_default();
             let udt_name: String = r.try_get(2).unwrap_or_default();
+
+            // Use udt_name as display type: it gives concise PG-native names
+            // (timestamptz, uuid, jsonb, _int4, etc.) rather than SQL-standard verbose names.
+            let display_type = if udt_name.starts_with('_') {
+                format!("{}[]", &udt_name[1..]) // _int4 → int4[]
+            } else {
+                udt_name.clone()
+            };
+            real_types.insert(name.clone(), display_type);
 
             // Types the Any driver cannot map to a Rust type without an explicit cast.
             let needs_cast = matches!(
@@ -321,7 +349,7 @@ async fn build_pg_safe_select(pool: &sqlx::AnyPool, schema: &str, table: &str) -
                     | "bytea"
                     | "numeric"
                     | "USER-DEFINED" | "ARRAY"
-            ) || udt_name.starts_with('_'); // array types have _ prefix in udt_name
+            ) || udt_name.starts_with('_');
 
             let quoted = format!("\"{}\"", name.replace('"', "\"\""));
             if needs_cast {
@@ -332,10 +360,13 @@ async fn build_pg_safe_select(pool: &sqlx::AnyPool, schema: &str, table: &str) -
         })
         .collect();
 
-    format!(
-        "SELECT {} FROM \"{}\".\"{}\"",
-        cols.join(", "),
-        schema,
-        table
+    (
+        format!(
+            "SELECT {} FROM \"{}\".\"{}\"",
+            cols.join(", "),
+            schema,
+            table
+        ),
+        real_types,
     )
 }

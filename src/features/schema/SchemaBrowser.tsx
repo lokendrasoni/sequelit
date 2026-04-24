@@ -4,9 +4,19 @@ import { useConnectionStore } from "@/stores/connectionStore";
 import { useTabStore } from "@/stores/tabStore";
 import {
   ChevronRight, ChevronDown, Table2, Eye, RefreshCw, Database,
-  Network, GitCompare, ChevronsUpDown, Filter,
+  Network, GitCompare, ChevronsUpDown, Filter, Copy, List,
+  FunctionSquare, Hash, Play, Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+interface CtxMenu {
+  x: number;
+  y: number;
+  kind: "schema" | "table";
+  schema: string;
+  table?: string;
+  tableType?: string;
+}
 
 interface TableInfo {
   schema: string;
@@ -35,6 +45,8 @@ export function SchemaBrowser() {
   const [browseDb, setBrowseDb] = useState<string | null>(null);
   const [dbPickerOpen, setDbPickerOpen] = useState(false);
   const dbPickerRef = useRef<HTMLDivElement>(null);
+  const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null);
+  const ctxMenuRef = useRef<HTMLDivElement>(null);
   const [showSystem, setShowSystem] = useState(() => {
     return localStorage.getItem("schema-show-system") === "true";
   });
@@ -70,6 +82,23 @@ export function SchemaBrowser() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
+
+  // Close context menu on outside click or Escape.
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onClick = (e: MouseEvent) => {
+      if (ctxMenuRef.current && !ctxMenuRef.current.contains(e.target as Node)) {
+        setCtxMenu(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setCtxMenu(null); };
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [ctxMenu]);
 
   // ── helpers ───────────────────────────────────────────────────────────────
 
@@ -178,9 +207,54 @@ export function SchemaBrowser() {
     openTab({ type: "schema-diff", title: "Schema Diff", connectionId: activeConnectionId });
   };
 
+  const ctxAction = (fn: () => void) => {
+    setCtxMenu(null);
+    fn();
+  };
+
+  const copyToClipboard = (text: string) => navigator.clipboard.writeText(text);
+
+  const openInEditor = (schema: string, table: string) => {
+    if (!activeConnectionId) return;
+    openTab({
+      type: "query",
+      title: `${table}`,
+      connectionId: activeConnectionId,
+      schema,
+      table,
+    });
+  };
+
+  const openTableProps = (schema: string, table: string) => {
+    if (!activeConnectionId) return;
+    openTab({ type: "table-props", title: `${schema}.${table}`, connectionId: activeConnectionId, schema, table });
+  };
+
+  const openSchemaObjects = (schema: string, view: "types" | "functions" | "sequences") => {
+    if (!activeConnectionId) return;
+    const labels = { types: "Types", functions: "Functions", sequences: "Sequences" };
+    openTab({ type: "schema-objects", title: `${schema} — ${labels[view]}`, connectionId: activeConnectionId, schema });
+  };
+
   if (!isConnected) return null;
 
+  const CtxMenuItem = ({ icon: Icon, label, onClick, danger }: { icon: React.ElementType; label: string; onClick: () => void; danger?: boolean }) => (
+    <button
+      onClick={onClick}
+      className={cn(
+        "w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent transition-colors text-left",
+        danger ? "text-destructive hover:text-destructive" : "text-foreground"
+      )}
+    >
+      <Icon size={12} className="shrink-0 text-muted-foreground" />
+      {label}
+    </button>
+  );
+
+  const CtxSep = () => <div className="my-0.5 border-t border-border" />;
+
   return (
+    <>
     <div className="flex flex-col min-h-0 border-t border-sidebar-border">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5 shrink-0">
@@ -278,6 +352,10 @@ export function SchemaBrowser() {
             <div
               className="flex items-center gap-1.5 px-3 py-1 cursor-pointer hover:bg-sidebar-accent text-xs text-sidebar-foreground group"
               onClick={() => toggleSchema(schema.name)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setCtxMenu({ x: e.clientX, y: e.clientY, kind: "schema", schema: schema.name });
+              }}
             >
               {schema.loading ? (
                 <RefreshCw size={11} className="animate-spin text-muted-foreground" />
@@ -308,6 +386,11 @@ export function SchemaBrowser() {
                     key={table.name}
                     className="flex items-center gap-1.5 pl-7 pr-3 py-0.5 cursor-pointer hover:bg-sidebar-accent text-xs text-sidebar-foreground/80"
                     onClick={() => openDataBrowser(schema.name, table.name)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setCtxMenu({ x: e.clientX, y: e.clientY, kind: "table", schema: schema.name, table: table.name, tableType: table.table_type });
+                    }}
                   >
                     {isView ? (
                       <Eye size={11} className="text-blue-400 shrink-0" />
@@ -322,5 +405,46 @@ export function SchemaBrowser() {
         ))}
       </div>
     </div>
+
+    {/* Context menu */}
+    {ctxMenu && (
+      <div
+        ref={ctxMenuRef}
+        className="fixed z-50 min-w-[180px] rounded-md border border-border bg-popover shadow-lg py-1 overflow-hidden"
+        style={{ left: ctxMenu.x, top: ctxMenu.y }}
+      >
+        {ctxMenu.kind === "schema" && (
+          <>
+            <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border mb-1">
+              {ctxMenu.schema}
+            </div>
+            <CtxMenuItem icon={RefreshCw} label="Refresh" onClick={() => ctxAction(() => activeConnectionId && doLoadSchemas(activeConnectionId, browseDb))} />
+            <CtxMenuItem icon={Copy} label="Copy name" onClick={() => ctxAction(() => copyToClipboard(ctxMenu.schema))} />
+            <CtxSep />
+            <CtxMenuItem icon={List} label="View Types" onClick={() => ctxAction(() => openSchemaObjects(ctxMenu.schema, "types"))} />
+            <CtxMenuItem icon={FunctionSquare} label="View Functions" onClick={() => ctxAction(() => openSchemaObjects(ctxMenu.schema, "functions"))} />
+            <CtxMenuItem icon={Hash} label="View Sequences" onClick={() => ctxAction(() => openSchemaObjects(ctxMenu.schema, "sequences"))} />
+            <CtxSep />
+            <CtxMenuItem icon={Network} label="View ERD" onClick={() => ctxAction(() => activeConnectionId && openTab({ type: "erd", title: `ERD: ${ctxMenu.schema}`, connectionId: activeConnectionId, schema: ctxMenu.schema }))} />
+          </>
+        )}
+        {ctxMenu.kind === "table" && ctxMenu.table && (
+          <>
+            <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground border-b border-border mb-1">
+              {ctxMenu.schema}.{ctxMenu.table}
+            </div>
+            <CtxMenuItem icon={Table2} label="Open Data Browser" onClick={() => ctxAction(() => openDataBrowser(ctxMenu.schema, ctxMenu.table!))} />
+            <CtxMenuItem icon={Play} label="Open in Editor" onClick={() => ctxAction(() => openInEditor(ctxMenu.schema, ctxMenu.table!))} />
+            <CtxSep />
+            <CtxMenuItem icon={Search} label="View Properties" onClick={() => ctxAction(() => openTableProps(ctxMenu.schema, ctxMenu.table!))} />
+            <CtxMenuItem icon={Network} label="View ERD" onClick={() => ctxAction(() => activeConnectionId && openTab({ type: "erd", title: `ERD: ${ctxMenu.schema}`, connectionId: activeConnectionId, schema: ctxMenu.schema }))} />
+            <CtxSep />
+            <CtxMenuItem icon={Copy} label="Copy name" onClick={() => ctxAction(() => copyToClipboard(ctxMenu.table!))} />
+            <CtxMenuItem icon={Copy} label="Copy qualified name" onClick={() => ctxAction(() => copyToClipboard(`${ctxMenu.schema}.${ctxMenu.table!}`))} />
+          </>
+        )}
+      </div>
+    )}
+    </>
   );
 }

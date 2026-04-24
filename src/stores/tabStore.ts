@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type TabType = "query" | "data" | "schema" | "dashboard" | "erd" | "schema-diff" | "activity" | "roles" | "pg-config" | "terminal" | "jobs" | "ai" | "workspace" | "pg-management";
+export type TabType = "query" | "data" | "schema" | "dashboard" | "erd" | "schema-diff" | "activity" | "roles" | "pg-config" | "terminal" | "jobs" | "ai" | "workspace" | "pg-management" | "table-props" | "schema-objects";
 
 export interface Tab {
   id: string;

@@ -12,6 +12,8 @@ import { JobScheduler } from "@/features/jobs/JobScheduler";
 import { AiAssistant } from "@/features/ai/AiAssistant";
 import { WorkspaceManager } from "@/features/workspace/WorkspaceManager";
 import { PgManagement } from "@/features/pgmanagement/PgManagement";
+import { TablePropertiesTab } from "@/features/inspector/TablePropertiesTab";
+import { SchemaObjectsTab } from "@/features/inspector/SchemaObjectsTab";
 
 export function TabContent() {
   const { tabs, activeTabId } = useTabStore();
@@ -47,6 +49,8 @@ export function TabContent() {
           {tab.type === "ai" && <AiAssistant tab={tab} />}
           {tab.type === "workspace" && <WorkspaceManager tab={tab} />}
           {tab.type === "pg-management" && <PgManagement tab={tab} />}
+          {tab.type === "table-props" && <TablePropertiesTab tab={tab} />}
+          {tab.type === "schema-objects" && <SchemaObjectsTab tab={tab} />}
         </div>
       ))}
     </div>
