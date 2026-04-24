@@ -4,22 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: 'Version bump type'
+        description: 'Version bump type (no-bump rebuilds and replaces assets on the existing tag)'
         required: true
         type: choice
         options:
           - patch
           - minor
           - major
+          - no-bump
 
 jobs:
-  # ── 1. Bump version, commit, and push a tag ──────────────────────────────
+  # ── 1. Bump version (skipped for no-bump), commit, and push/ensure tag ───
   version:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
-      new_version: ${{ steps.version.outputs.new_version }}
+      new_version: ${{ steps.calc.outputs.new_version }}
 
     steps:
       - name: Checkout
@@ -27,44 +28,62 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Calculate new version
-        id: version
+      - name: Calculate version and update files
+        id: calc
         run: |
           CURRENT=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          echo "Current version: $CURRENT"
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          case "${{ github.event.inputs.bump }}" in
-            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-            patch) PATCH=$((PATCH + 1)) ;;
-          esac
-          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
-          echo "New version: $NEW_VERSION"
-          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          BUMP="${{ github.event.inputs.bump }}"
 
-      - name: Update tauri.conf.json
-        run: |
-          node -e "
-            const fs = require('fs');
-            const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-            conf.version = '${{ steps.version.outputs.new_version }}';
-            fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
-          "
+          if [ "$BUMP" = "no-bump" ]; then
+            echo "No bump — keeping version $CURRENT"
+            echo "new_version=$CURRENT" >> "$GITHUB_OUTPUT"
+          else
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+            case "$BUMP" in
+              major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+              minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+              patch) PATCH=$((PATCH + 1)) ;;
+            esac
+            NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            echo "Bumping $CURRENT → $NEW_VERSION"
 
-      - name: Update Cargo.toml
-        run: |
-          sed -i "s/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"${{ steps.version.outputs.new_version }}\"/" src-tauri/Cargo.toml
+            node -e "
+              const fs = require('fs');
+              const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+              conf.version = '$NEW_VERSION';
+              fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
+            "
+            sed -i "s/^version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"$NEW_VERSION\"/" src-tauri/Cargo.toml
 
-      - name: Commit and tag
+            echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit, tag, and push
         run: |
+          BUMP="${{ github.event.inputs.bump }}"
+          TAG="v${{ steps.calc.outputs.new_version }}"
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add src-tauri/tauri.conf.json src-tauri/Cargo.toml
-          git commit -m "chore: bump version to ${{ steps.version.outputs.new_version }}"
-          git tag "v${{ steps.version.outputs.new_version }}"
-          git push origin HEAD:${{ github.ref_name }} --follow-tags
 
-  # ── 2. Build on each platform ────────────────────────────────────────────
+          if [ "$BUMP" != "no-bump" ]; then
+            # New version: commit files, tag, push branch + tag together
+            git add src-tauri/tauri.conf.json src-tauri/Cargo.toml
+            git commit -m "chore: bump version to ${{ steps.calc.outputs.new_version }}"
+            git tag "$TAG"
+            git push origin HEAD:${{ github.ref_name }} --follow-tags
+          else
+            # No bump: ensure the tag exists (create it if missing, otherwise reuse)
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" > /dev/null 2>&1; then
+              echo "Tag $TAG already exists — will replace assets on existing release"
+            else
+              echo "Tag $TAG not found — creating it at current HEAD"
+              git tag "$TAG"
+              git push origin "$TAG"
+            fi
+          fi
+
+  # ── 2. Build on each platform ─────────────────────────────────────────────
   build:
     needs: version
     strategy:
@@ -81,7 +100,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout (post version bump)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
@@ -156,7 +175,7 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
           retention-days: 1
 
-  # ── 3. Collect artifacts and publish GitHub Release ──────────────────────
+  # ── 3. Publish or update the GitHub Release ───────────────────────────────
   release:
     needs: [version, build]
     runs-on: ubuntu-latest
@@ -172,30 +191,40 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f | sort
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.version.outputs.new_version }}
-          name: Sequelit v${{ needs.version.outputs.new_version }}
-          body: |
-            ## Sequelit v${{ needs.version.outputs.new_version }}
+      - name: Publish or update release
+        run: |
+          TAG="v${{ needs.version.outputs.new_version }}"
+          VERSION="${{ needs.version.outputs.new_version }}"
 
-            ### Download
+          mapfile -t FILES < <(find artifacts -type f | sort)
 
-            | Platform | File | Notes |
-            |---|---|---|
-            | **macOS** | `.dmg` | Universal binary — Apple Silicon + Intel |
-            | **Ubuntu / Debian** | `.deb` | `sudo dpkg -i sequelit_*.deb` |
-            | **Linux (generic)** | `.AppImage` | `chmod +x sequelit_*.AppImage && ./sequelit_*.AppImage` |
-            | **Windows** | `.msi` | MSI installer |
-            | **Windows (alt)** | `.exe` | NSIS installer |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG exists — replacing binary assets"
+            gh release upload "$TAG" "${FILES[@]}" --clobber
+          else
+            echo "Creating release $TAG"
+            cat > release_notes.md << NOTES
+          ## Sequelit v${VERSION}
 
-            ### Requirements
-            - macOS 12+
-            - Ubuntu 22.04+ / Debian 12+
-            - Windows 10+
-          files: artifacts/**/*
-          draft: false
-          prerelease: false
+          ### Download
+
+          | Platform | File | Notes |
+          |---|---|---|
+          | **macOS** | \`.dmg\` | Universal binary — Apple Silicon + Intel |
+          | **Ubuntu / Debian** | \`.deb\` | \`sudo dpkg -i sequelit_*.deb\` |
+          | **Linux (generic)** | \`.AppImage\` | \`chmod +x sequelit_*.AppImage && ./sequelit_*.AppImage\` |
+          | **Windows** | \`.msi\` | MSI installer |
+          | **Windows (alt)** | \`.exe\` | NSIS installer |
+
+          ### Requirements
+          - macOS 12+
+          - Ubuntu 22.04+ / Debian 12+
+          - Windows 10+
+          NOTES
+            gh release create "$TAG" \
+              --title "Sequelit v${VERSION}" \
+              --notes-file release_notes.md \
+              "${FILES[@]}"
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
