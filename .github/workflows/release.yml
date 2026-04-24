@@ -81,10 +81,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout (at new tag)
+      - name: Checkout (post version bump)
         uses: actions/checkout@v4
         with:
-          ref: v${{ needs.version.outputs.new_version }}
+          ref: ${{ github.ref_name }}
 
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-22.04'
