@@ -195,33 +195,35 @@ jobs:
         run: |
           TAG="v${{ needs.version.outputs.new_version }}"
           VERSION="${{ needs.version.outputs.new_version }}"
+          REPO="${{ github.repository }}"
 
           mapfile -t FILES < <(find artifacts -type f | sort)
 
-          if gh release view "$TAG" > /dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
             echo "Release $TAG exists — replacing binary assets"
-            gh release upload "$TAG" "${FILES[@]}" --clobber
+            gh release upload "$TAG" --repo "$REPO" "${FILES[@]}" --clobber
           else
             echo "Creating release $TAG"
-            cat > release_notes.md << NOTES
-          ## Sequelit v${VERSION}
-
-          ### Download
-
-          | Platform | File | Notes |
-          |---|---|---|
-          | **macOS** | \`.dmg\` | Universal binary — Apple Silicon + Intel |
-          | **Ubuntu / Debian** | \`.deb\` | \`sudo dpkg -i sequelit_*.deb\` |
-          | **Linux (generic)** | \`.AppImage\` | \`chmod +x sequelit_*.AppImage && ./sequelit_*.AppImage\` |
-          | **Windows** | \`.msi\` | MSI installer |
-          | **Windows (alt)** | \`.exe\` | NSIS installer |
-
-          ### Requirements
-          - macOS 12+
-          - Ubuntu 22.04+ / Debian 12+
-          - Windows 10+
-          NOTES
+            {
+              echo "## Sequelit v${VERSION}"
+              echo ""
+              echo "### Download"
+              echo ""
+              echo "| Platform | File | Notes |"
+              echo "|---|---|---|"
+              echo "| **macOS** | \`.dmg\` | Universal binary — Apple Silicon + Intel |"
+              echo "| **Ubuntu / Debian** | \`.deb\` | \`sudo dpkg -i sequelit_*.deb\` |"
+              echo "| **Linux (generic)** | \`.AppImage\` | \`chmod +x sequelit_*.AppImage && ./sequelit_*.AppImage\` |"
+              echo "| **Windows** | \`.msi\` | MSI installer |"
+              echo "| **Windows (alt)** | \`.exe\` | NSIS installer |"
+              echo ""
+              echo "### Requirements"
+              echo "- macOS 12+"
+              echo "- Ubuntu 22.04+ / Debian 12+"
+              echo "- Windows 10+"
+            } > release_notes.md
             gh release create "$TAG" \
+              --repo "$REPO" \
               --title "Sequelit v${VERSION}" \
               --notes-file release_notes.md \
               "${FILES[@]}"
