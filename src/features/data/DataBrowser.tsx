@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Tab } from "@/stores/tabStore";
 import { ResultGrid, ColumnInfo } from "@/features/editor/ResultGrid";
@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import type { SortingState, ColumnFiltersState } from "@tanstack/react-table";
 
 interface QueryResult {
   columns: ColumnInfo[];
@@ -34,12 +35,18 @@ export function DataBrowser({ tab }: Props) {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [filter, setFilter] = useState("");
+  const [filterInput, setFilterInput] = useState("");
+  const [debouncedFilter, setDebouncedFilter] = useState("");
   const [showJson, setShowJson] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
 
   const [showColumnFilters, setShowColumnFilters] = useState(false);
+
+  // Server-side sort + per-column filter state
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [debouncedColumnFilters, setDebouncedColumnFilters] = useState<ColumnFiltersState>([]);
 
   // Row selection + edit/delete
   const [pkCols, setPkCols] = useState<string[]>([]);
@@ -47,6 +54,30 @@ export function DataBrowser({ tab }: Props) {
   const [selectedRow, setSelectedRow] = useState<Record<string, unknown> | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Debounce quick-filter input
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedFilter(filterInput), 300);
+    return () => clearTimeout(t);
+  }, [filterInput]);
+
+  // Debounce per-column filters
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedColumnFilters(columnFilters), 300);
+    return () => clearTimeout(t);
+  }, [columnFilters]);
+
+  const serverSort = useMemo(
+    () => sorting.map((s) => ({ column: s.id, desc: !!s.desc })),
+    [sorting]
+  );
+  const serverColumnFilters = useMemo(
+    () =>
+      debouncedColumnFilters
+        .map((f) => ({ column: f.id, value: String(f.value ?? "") }))
+        .filter((f) => f.value.trim() !== ""),
+    [debouncedColumnFilters]
+  );
 
   const fetchData = useCallback(async (p: number) => {
     if (!tab.schema || !tab.table) return;
@@ -62,6 +93,9 @@ export function DataBrowser({ tab }: Props) {
         table: tab.table,
         page: p,
         pageSize: PAGE_SIZE,
+        sort: serverSort,
+        quickFilter: debouncedFilter.trim() ? debouncedFilter : null,
+        columnFilters: serverColumnFilters,
       });
       setResult(res);
     } catch (e) {
@@ -69,7 +103,7 @@ export function DataBrowser({ tab }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [tab.connectionId, tab.schema, tab.table]);
+  }, [tab.connectionId, tab.schema, tab.table, serverSort, debouncedFilter, serverColumnFilters]);
 
   // Load PK columns once on mount
   useEffect(() => {
@@ -80,30 +114,28 @@ export function DataBrowser({ tab }: Props) {
       table: tab.table,
     }).then((detail) => {
       const pks = detail.columns.filter((c) => c.is_primary_key).map((c) => c.name);
-      // Fall back to all columns if no explicit PK
       setPkCols(pks.length > 0 ? pks : detail.columns.map((c) => c.name));
     }).catch(() => setPkCols([]));
   }, [tab.connectionId, tab.schema, tab.table]);
 
+  // Reset to page 0 whenever sort / filter changes
   useEffect(() => {
-    fetchData(0);
-  }, [fetchData]);
+    setPage(0);
+  }, [serverSort, debouncedFilter, serverColumnFilters]);
+
+  useEffect(() => {
+    fetchData(page);
+  }, [fetchData, page]);
+
+  // Clear per-column filters when filter row is hidden
+  useEffect(() => {
+    if (!showColumnFilters && columnFilters.length > 0) setColumnFilters([]);
+  }, [showColumnFilters]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePageChange = (next: number) => {
     if (next < 0) return;
     setPage(next);
-    fetchData(next);
   };
-
-  const filteredRows = result
-    ? filter.trim()
-      ? result.rows.filter((row) =>
-          row.some((cell) =>
-            cell !== null && String(cell).toLowerCase().includes(filter.toLowerCase())
-          )
-        )
-      : result.rows
-    : [];
 
   const handleRowSelect = (idx: number, row: Record<string, unknown>) => {
     setSelectedRowIdx(idx);
@@ -160,6 +192,9 @@ export function DataBrowser({ tab }: Props) {
     }
   };
 
+  const activeFilterCount =
+    (debouncedFilter.trim() ? 1 : 0) + serverColumnFilters.length + serverSort.length;
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Toolbar */}
@@ -181,18 +216,19 @@ export function DataBrowser({ tab }: Props) {
             <Filter size={11} />
           </button>
           <Input
-            value={filter}
-            onChange={(e) => {
-              setFilter(e.target.value);
-              setSelectedRowIdx(null);
-              setSelectedRow(null);
-            }}
-            placeholder="Quick filter rows…"
+            value={filterInput}
+            onChange={(e) => setFilterInput(e.target.value)}
+            placeholder="Search all columns…"
             className="h-6 text-xs py-0"
           />
         </div>
 
         <div className="flex items-center gap-1 ml-auto">
+          {activeFilterCount > 0 && (
+            <span className="text-[10px] text-muted-foreground mr-1">
+              {activeFilterCount} active
+            </span>
+          )}
           <button
             onClick={() => setShowJson((s) => !s)}
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-accent"
@@ -250,7 +286,7 @@ export function DataBrowser({ tab }: Props) {
           {result ? (
             <ResultGrid
               columns={result.columns}
-              rows={filteredRows}
+              rows={result.rows}
               rowsAffected={result.rows_affected}
               executionTimeMs={result.execution_time_ms}
               error={result.error}
@@ -259,6 +295,10 @@ export function DataBrowser({ tab }: Props) {
               onRowSelect={handleRowSelect}
               onCellCommit={handleCellCommit}
               showColumnFilters={showColumnFilters}
+              sorting={sorting}
+              onSortingChange={setSorting}
+              columnFilters={columnFilters}
+              onColumnFiltersChange={setColumnFilters}
             />
           ) : (
             <div className="h-full flex items-center justify-center text-xs text-muted-foreground">

@@ -31,6 +31,11 @@ interface Props {
   onRowSelect?: (idx: number, row: Record<string, unknown>) => void;
   onCellCommit?: (row: Record<string, unknown>, colName: string, newVal: string | null) => void;
   showColumnFilters?: boolean;
+  // Controlled mode (server-side sort/filter). When provided, internal state is bypassed.
+  sorting?: SortingState;
+  onSortingChange?: (next: SortingState) => void;
+  columnFilters?: ColumnFiltersState;
+  onColumnFiltersChange?: (next: ColumnFiltersState) => void;
 }
 
 interface EditingCell {
@@ -42,9 +47,28 @@ interface EditingCell {
 export function ResultGrid({
   columns, rows, rowsAffected, executionTimeMs, error,
   onRowClick, selectedRowIndex, onRowSelect, onCellCommit, showColumnFilters,
+  sorting: sortingProp, onSortingChange,
+  columnFilters: columnFiltersProp, onColumnFiltersChange,
 }: Props) {
-  const [sorting, setSorting] = useState<SortingState>([]);
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const controlled = onSortingChange !== undefined || onColumnFiltersChange !== undefined;
+
+  const [internalSorting, setInternalSorting] = useState<SortingState>([]);
+  const [internalColumnFilters, setInternalColumnFilters] = useState<ColumnFiltersState>([]);
+  const sorting = controlled ? (sortingProp ?? []) : internalSorting;
+  const columnFilters = controlled ? (columnFiltersProp ?? []) : internalColumnFilters;
+  const setSorting = controlled
+    ? (updater: SortingState | ((prev: SortingState) => SortingState)) => {
+        const next = typeof updater === "function" ? (updater as (p: SortingState) => SortingState)(sorting) : updater;
+        onSortingChange?.(next);
+      }
+    : setInternalSorting;
+  const setColumnFilters = controlled
+    ? (updater: ColumnFiltersState | ((prev: ColumnFiltersState) => ColumnFiltersState)) => {
+        const next = typeof updater === "function" ? (updater as (p: ColumnFiltersState) => ColumnFiltersState)(columnFilters) : updater;
+        onColumnFiltersChange?.(next);
+      }
+    : setInternalColumnFilters;
+
   const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
 
@@ -52,10 +76,10 @@ export function ResultGrid({
     if (editingCell) editInputRef.current?.focus();
   }, [editingCell]);
 
-  // Clear column filters when the filter row is hidden
+  // Clear column filters when the filter row is hidden (uncontrolled mode only)
   useEffect(() => {
-    if (!showColumnFilters) setColumnFilters([]);
-  }, [showColumnFilters]);
+    if (!showColumnFilters && !controlled) setInternalColumnFilters([]);
+  }, [showColumnFilters, controlled]);
 
   const columnHelper = createColumnHelper<Record<string, unknown>>();
 
@@ -103,8 +127,10 @@ export function ResultGrid({
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
+    // When controlled, sort + filter happen server-side — skip client models.
+    ...(controlled
+      ? { manualSorting: true, manualFiltering: true }
+      : { getSortedRowModel: getSortedRowModel(), getFilteredRowModel: getFilteredRowModel() }),
   });
 
   const copyAsCsv = () => {
