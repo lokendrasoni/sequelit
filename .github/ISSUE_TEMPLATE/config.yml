@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Discussions
+    url: https://github.com/lokendrasoni/sequelit/discussions
+    about: Ask questions, propose designs, or chat about Sequelit. Better than an issue for anything open-ended.
+  - name: 📘 Contributing guide
+    url: https://github.com/lokendrasoni/sequelit/blob/master/CONTRIBUTING.md
+    about: Dev setup, project structure, commit conventions, release process.
+  - name: 📐 Project specification
+    url: https://github.com/lokendrasoni/sequelit/blob/master/PROJECT.md
+    about: Full feature spec, architecture, and roadmap — the source of truth.
